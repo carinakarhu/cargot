@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cargojunat Suomessa</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: white;
+    }
+
+    header {
+      padding: 12px 16px;
+      background: #181818;
+      border-bottom: 1px solid #333;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    #status {
+      margin-top: 6px;
+      font-size: 14px;
+      color: #ccc;
+    }
+
+    #map {
+      height: calc(100vh - 72px);
+      width: 100%;
+    }
+
+    .cargo-popup {
+      font-size: 14px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Suomen tavarajunat kartalla</h1>
+    <div id="status">Ladataan junadataa...</div>
+  </header>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    const API = "https://rata.digitraffic.fi/api/v1";
+
+    const map = L.map("map").setView([64.5, 26.0], 6);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "© OpenStreetMap | Data: Fintraffic / Digitraffic"
+    }).addTo(map);
+
+    let markerLayer = L.layerGroup().addTo(map);
+
+    function formatTime(timestamp) {
+      if (!timestamp) return "ei tiedossa";
+      return new Date(timestamp).toLocaleString("fi-FI");
+    }
+
+    async function loadCargoTrains() {
+      const status = document.getElementById("status");
+
+      try {
+        status.textContent = "Haetaan aktiivisia junia ja GPS-sijaintejä...";
+
+        const [trainsResponse, locationsResponse] = await Promise.all([
+          fetch(`${API}/live-trains`),
+          fetch(`${API}/train-locations.geojson/latest`)
+        ]);
+
+        const trains = await trainsResponse.json();
+        const locations = await locationsResponse.json();
+
+        const cargoTrains = trains.filter(train =>
+          train.trainCategory === "Cargo" && train.cancelled !== true
+        );
+
+        const cargoByKey = new Map();
+
+        cargoTrains.forEach(train => {
+          const key = `${train.trainNumber}-${train.departureDate}`;
+          cargoByKey.set(key, train);
+        });
+
+        markerLayer.clearLayers();
+
+        let visibleCount = 0;
+
+        locations.features.forEach(feature => {
+          const props = feature.properties;
+          const coords = feature.geometry.coordinates;
+
+          const key = `${props.trainNumber}-${props.departureDate}`;
+          const train = cargoByKey.get(key);
+
+          if (!train) return;
+
+          const longitude = coords[0];
+          const latitude = coords[1];
+
+          const marker = L.circleMarker([latitude, longitude], {
+            radius: 7,
+            weight: 2,
+            fillOpacity: 0.85
+          });
+
+          marker.bindPopup(`
+            <div class="cargo-popup">
+              <strong>Tavarajuna ${props.trainNumber}</strong><br>
+              Lähtöpäivä: ${props.departureDate}<br>
+              Operaattori: ${train.operatorShortCode || "ei tiedossa"}<br>
+              Junatyyppi: ${train.trainType || "ei tiedossa"}<br>
+              Nopeus: ${props.speed ?? "ei tiedossa"} km/h<br>
+              Tarkkuus: ${props.accuracy ?? "ei tiedossa"} m<br>
+              Päivitetty: ${formatTime(props.timestamp)}
+            </div>
+          `);
+
+          marker.addTo(markerLayer);
+          visibleCount++;
+        });
+
+        status.textContent =
+          `Aktiivisia tavarajunia: ${cargoTrains.length}. Kartalla GPS-sijainnillä: ${visibleCount}. Päivitetty ${new Date().toLocaleTimeString("fi-FI")}.`;
+
+      } catch (error) {
+        console.error(error);
+        status.textContent = "Datan lataus epäonnistui.";
+      }
+    }
+
+    loadCargoTrains();
+    setInterval(loadCargoTrains, 30000);
+  </script>
+</body>
+</html>
